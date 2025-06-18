@@ -5,9 +5,10 @@ Handles SOAP requests to Ariba's Polling Service.
 
 import base64
 import time
-from typing import Optional
+from typing import Optional, Dict, Any
 import requests
 from .config import Config
+from .exceptions import AribaServiceError, AribaAuthenticationError
 
 
 class AribaClient:
@@ -74,7 +75,7 @@ class AribaClient:
             'Authorization': f'Basic {self._create_auth_header()}'
         }
     
-    def call_polling_service(self, service_name: str = "BusinessPartnerSUITEBulkReplicateRequest_In") -> Optional[requests.Response]:
+    def call_polling_service(self, service_name: str = "BusinessPartnerSUITEBulkReplicateRequest_In") -> Dict[str, Any]:
         """
         Call Ariba's Polling Service.
         
@@ -82,32 +83,48 @@ class AribaClient:
             service_name: Name of the inbound service to poll
             
         Returns:
-            Optional[requests.Response]: Response object if successful, None otherwise
+            Dict[str, Any]: Response data with success status, status code, and content
+            
+        Raises:
+            AribaAuthenticationError: If credentials are invalid
+            AribaServiceError: If the service call fails
         """
         if not self.config.validate_credentials():
-            return None
+            raise AribaAuthenticationError("Invalid or missing credentials")
         
         url = self.config.base_url
         soap_request = self._create_soap_request(service_name)
         headers = self._create_headers()
         
         try:
-            response = self.session.post(url, data=soap_request, headers=headers)
+            response = self.session.post(url, data=soap_request, headers=headers, timeout=30)
             
-            if response.status_code == 200:
-                print("Request successful!")
-                print("Response:")
-                print(response.text)
-            else:
-                print(f"Request failed with status code: {response.status_code}")
-                print("Response:")
-                print(response.text)
+            result = {
+                "success": response.status_code == 200,
+                "status_code": response.status_code,
+                "message": "Request completed",
+                "data": {
+                    "response_text": response.text,
+                    "headers": dict(response.headers),
+                    "service_name": service_name
+                },
+                "error": None
+            }
             
-            return response
+            if response.status_code != 200:
+                result["message"] = f"Request failed with status code: {response.status_code}"
+                result["error"] = response.text
+                raise AribaServiceError(
+                    f"Ariba service returned status {response.status_code}",
+                    status_code=response.status_code
+                )
             
+            return result
+            
+        except requests.exceptions.RequestException as e:
+            raise AribaServiceError(f"Network error: {str(e)}")
         except Exception as e:
-            print(f"Error occurred: {str(e)}")
-            return None
+            raise AribaServiceError(f"Unexpected error: {str(e)}")
     
     def close(self):
         """Close the client session."""
